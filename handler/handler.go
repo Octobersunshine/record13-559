@@ -132,7 +132,16 @@ func (h *Handler) Deduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx, err := h.store.DeductBalance(req.MemberID, req.CardID, req.Amount, req.Description)
+	amountFen := models.YuanToFen(req.Amount)
+	if amountFen <= 0 {
+		writeJSON(w, http.StatusBadRequest, &apiResponse{
+			Code:    http.StatusBadRequest,
+			Message: "扣款金额过小（不足 0.01 元）",
+		})
+		return
+	}
+
+	result, err := h.store.DeductBalance(req.MemberID, req.CardID, req.RequestID, amountFen, req.Description)
 	if err != nil {
 		var statusCode int
 		switch {
@@ -148,13 +157,19 @@ func (h *Handler) Deduct(w http.ResponseWriter, r *http.Request) {
 			statusCode = http.StatusBadRequest
 		case errors.Is(err, store.ErrInsufficientBalance):
 			statusCode = http.StatusPaymentRequired
+		case errors.Is(err, store.ErrDuplicateRequest):
+			statusCode = http.StatusConflict
+		case errors.Is(err, store.ErrNegativeBalancePanic):
+			statusCode = http.StatusInternalServerError
+			log.Printf("FATAL 余额负数防护触发: %v", err)
 		default:
 			statusCode = http.StatusInternalServerError
 		}
 
 		deductResp := models.DeductResponse{
-			Success: false,
-			Message: err.Error(),
+			Success:   false,
+			Message:   err.Error(),
+			RequestID: req.RequestID,
 		}
 
 		writeJSON(w, statusCode, &apiResponse{
@@ -165,14 +180,28 @@ func (h *Handler) Deduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	details := make([]models.CardDeductDetail, 0, len(result.Details))
+	for _, d := range result.Details {
+		details = append(details, models.CardDeductDetail{
+			CardID:       d.CardID,
+			BeforeAmount: models.FenToYuan(d.BeforeBalanceFen),
+			DeductAmount: models.FenToYuan(d.DeductFen),
+			AfterAmount:  models.FenToYuan(d.AfterBalanceFen),
+		})
+	}
+
+	var firstTxID string
+	if len(result.TransactionIDs) > 0 {
+		firstTxID = result.TransactionIDs[0]
+	}
+
 	deductResp := models.DeductResponse{
 		Success:       true,
 		Message:       "扣款成功",
-		CardID:        tx.CardID,
-		BeforeAmount:  tx.BeforeBalance,
-		DeductAmount:  tx.Amount,
-		AfterAmount:   tx.AfterBalance,
-		TransactionID: tx.ID,
+		RequestID:     req.RequestID,
+		TotalDeduct:   models.FenToYuan(result.TotalDeductFen),
+		TransactionID: firstTxID,
+		Details:       details,
 	}
 
 	writeJSON(w, http.StatusOK, &apiResponse{
