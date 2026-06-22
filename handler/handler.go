@@ -32,6 +32,23 @@ func writeJSON(w http.ResponseWriter, status int, resp *apiResponse) {
 	}
 }
 
+func (h *Handler) GetDiscountConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, &apiResponse{
+			Code:    http.StatusMethodNotAllowed,
+			Message: "方法不允许，请使用 GET 请求",
+		})
+		return
+	}
+	tiers := h.store.GetDiscountTiers()
+	resp := models.DiscountConfigResponse{Tiers: tiers}
+	writeJSON(w, http.StatusOK, &apiResponse{
+		Code:    0,
+		Message: "查询折扣配置成功",
+		Data:    resp,
+	})
+}
+
 func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, &apiResponse{
@@ -66,6 +83,15 @@ func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	currentTier, nextTier, amountToNextFen, _, err := h.store.GetMemberTierInfo(memberID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, &apiResponse{
+			Code:    http.StatusInternalServerError,
+			Message: "查询会员等级失败: " + err.Error(),
+		})
+		return
+	}
+
 	cards, err := h.store.GetCardsByMember(memberID)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, &apiResponse{
@@ -86,9 +112,12 @@ func (h *Handler) GetBalance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := &models.BalanceResponse{
-		MemberID:   member.ID,
-		MemberName: member.Name,
-		Cards:      cardInfos,
+		MemberID:         member.ID,
+		MemberName:       member.Name,
+		CurrentTier:      currentTier,
+		NextTier:         nextTier,
+		AmountToNextTier: models.FenToYuan(amountToNextFen),
+		Cards:            cardInfos,
 	}
 
 	writeJSON(w, http.StatusOK, &apiResponse{
@@ -132,8 +161,8 @@ func (h *Handler) Deduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	amountFen := models.YuanToFen(req.Amount)
-	if amountFen <= 0 {
+	originalFen := models.YuanToFen(req.Amount)
+	if originalFen <= 0 {
 		writeJSON(w, http.StatusBadRequest, &apiResponse{
 			Code:    http.StatusBadRequest,
 			Message: "扣款金额过小（不足 0.01 元）",
@@ -141,7 +170,7 @@ func (h *Handler) Deduct(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.store.DeductBalance(req.MemberID, req.CardID, req.RequestID, amountFen, req.Description)
+	result, err := h.store.DeductBalance(req.MemberID, req.CardID, req.RequestID, originalFen, req.Description)
 	if err != nil {
 		var statusCode int
 		switch {
@@ -183,10 +212,13 @@ func (h *Handler) Deduct(w http.ResponseWriter, r *http.Request) {
 	details := make([]models.CardDeductDetail, 0, len(result.Details))
 	for _, d := range result.Details {
 		details = append(details, models.CardDeductDetail{
-			CardID:       d.CardID,
-			BeforeAmount: models.FenToYuan(d.BeforeBalanceFen),
-			DeductAmount: models.FenToYuan(d.DeductFen),
-			AfterAmount:  models.FenToYuan(d.AfterBalanceFen),
+			CardID:         d.CardID,
+			BeforeAmount:   models.FenToYuan(d.BeforeBalanceFen),
+			OriginalDeduct: models.FenToYuan(d.OriginalDeductFen),
+			AppliedRate:    d.AppliedDiscountRate,
+			SavedAmount:    models.FenToYuan(d.SavedFen),
+			DiscountDeduct: models.FenToYuan(d.DiscountDeductFen),
+			AfterAmount:    models.FenToYuan(d.AfterBalanceFen),
 		})
 	}
 
@@ -195,13 +227,24 @@ func (h *Handler) Deduct(w http.ResponseWriter, r *http.Request) {
 		firstTxID = result.TransactionIDs[0]
 	}
 
+	var currentTier *models.DiscountTier
+	if result.AppliedTier != nil {
+		t := *result.AppliedTier
+		t.SyncFromFen()
+		currentTier = &t
+	}
+
 	deductResp := models.DeductResponse{
-		Success:       true,
-		Message:       "扣款成功",
-		RequestID:     req.RequestID,
-		TotalDeduct:   models.FenToYuan(result.TotalDeductFen),
-		TransactionID: firstTxID,
-		Details:       details,
+		Success:           true,
+		Message:           "扣款成功",
+		RequestID:         req.RequestID,
+		TotalOriginal:     models.FenToYuan(result.TotalOriginalFen),
+		TotalDiscountRate: result.TotalDiscountRate,
+		TotalSaved:        models.FenToYuan(result.TotalSavedFen),
+		TotalDeduct:       models.FenToYuan(result.TotalDeductFen),
+		CurrentTier:       currentTier,
+		TransactionID:     firstTxID,
+		Details:           details,
 	}
 
 	writeJSON(w, http.StatusOK, &apiResponse{

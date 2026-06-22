@@ -24,25 +24,46 @@ type StoredCard struct {
 	UpdatedAt  time.Time `json:"updated_at"`
 }
 
+type DiscountTier struct {
+	ID             string  `json:"id"`
+	TierName       string  `json:"tier_name"`
+	MinBalanceFen  int64   `json:"-"`
+	MaxBalanceFen  int64   `json:"-"`
+	MinBalance     float64 `json:"min_balance"`
+	MaxBalance     float64 `json:"max_balance"`
+	DiscountRate   float64 `json:"discount_rate"`
+	Description    string  `json:"description"`
+}
+
 type Transaction struct {
-	ID                 string    `json:"id"`
-	CardID             string    `json:"card_id"`
-	MemberID           string    `json:"member_id"`
-	Type               string    `json:"type"`
-	AmountFen          int64     `json:"-"`
-	Amount             float64   `json:"amount"`
-	BeforeBalanceFen   int64     `json:"-"`
-	BeforeBalance      float64   `json:"before_balance"`
-	AfterBalanceFen    int64     `json:"-"`
-	AfterBalance       float64   `json:"after_balance"`
-	Description        string    `json:"description"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                  string    `json:"id"`
+	CardID              string    `json:"card_id"`
+	MemberID            string    `json:"member_id"`
+	Type                string    `json:"type"`
+	AmountFen           int64     `json:"-"`
+	Amount              float64   `json:"amount"`
+	OriginalAmountFen   int64     `json:"-"`
+	OriginalAmount      float64   `json:"original_amount,omitempty"`
+	AppliedDiscountRate float64   `json:"applied_discount_rate,omitempty"`
+	SavedAmountFen      int64     `json:"-"`
+	SavedAmount         float64   `json:"saved_amount,omitempty"`
+	TierID              string    `json:"tier_id,omitempty"`
+	TierName            string    `json:"tier_name,omitempty"`
+	BeforeBalanceFen    int64     `json:"-"`
+	BeforeBalance       float64   `json:"before_balance"`
+	AfterBalanceFen     int64     `json:"-"`
+	AfterBalance        float64   `json:"after_balance"`
+	Description         string    `json:"description"`
+	CreatedAt           time.Time `json:"created_at"`
 }
 
 type BalanceResponse struct {
-	MemberID   string     `json:"member_id"`
-	MemberName string     `json:"member_name"`
-	Cards      []CardInfo `json:"cards"`
+	MemberID         string        `json:"member_id"`
+	MemberName       string        `json:"member_name"`
+	CurrentTier      *DiscountTier `json:"current_tier,omitempty"`
+	NextTier         *DiscountTier `json:"next_tier,omitempty"`
+	AmountToNextTier float64       `json:"amount_to_next_tier,omitempty"`
+	Cards            []CardInfo    `json:"cards"`
 }
 
 type CardInfo struct {
@@ -61,19 +82,30 @@ type DeductRequest struct {
 }
 
 type CardDeductDetail struct {
-	CardID       string  `json:"card_id"`
-	BeforeAmount float64 `json:"before_amount"`
-	DeductAmount float64 `json:"deduct_amount"`
-	AfterAmount  float64 `json:"after_amount"`
+	CardID            string  `json:"card_id"`
+	BeforeAmount      float64 `json:"before_amount"`
+	OriginalDeduct    float64 `json:"original_deduct,omitempty"`
+	AppliedRate       float64 `json:"applied_rate,omitempty"`
+	SavedAmount       float64 `json:"saved_amount,omitempty"`
+	DiscountDeduct    float64 `json:"discount_deduct"`
+	AfterAmount       float64 `json:"after_amount"`
 }
 
 type DeductResponse struct {
-	Success       bool               `json:"success"`
-	Message       string             `json:"message"`
-	RequestID     string             `json:"request_id,omitempty"`
-	TotalDeduct   float64            `json:"total_deduct,omitempty"`
-	TransactionID string             `json:"transaction_id,omitempty"`
-	Details       []CardDeductDetail `json:"details,omitempty"`
+	Success           bool               `json:"success"`
+	Message           string             `json:"message"`
+	RequestID         string             `json:"request_id,omitempty"`
+	TotalOriginal     float64            `json:"total_original,omitempty"`
+	TotalDiscountRate float64            `json:"total_discount_rate,omitempty"`
+	TotalSaved        float64            `json:"total_saved,omitempty"`
+	TotalDeduct       float64            `json:"total_deduct,omitempty"`
+	CurrentTier       *DiscountTier      `json:"current_tier,omitempty"`
+	TransactionID     string             `json:"transaction_id,omitempty"`
+	Details           []CardDeductDetail `json:"details,omitempty"`
+}
+
+type DiscountConfigResponse struct {
+	Tiers []DiscountTier `json:"tiers"`
 }
 
 func YuanToFen(yuan float64) int64 {
@@ -90,6 +122,13 @@ func (c *StoredCard) SyncBalanceFromFen() {
 
 func (t *Transaction) SyncAmountsFromFen() {
 	t.Amount = FenToYuan(t.AmountFen)
+	t.OriginalAmount = FenToYuan(t.OriginalAmountFen)
+	t.SavedAmount = FenToYuan(t.SavedAmountFen)
 	t.BeforeBalance = FenToYuan(t.BeforeBalanceFen)
 	t.AfterBalance = FenToYuan(t.AfterBalanceFen)
+}
+
+func (d *DiscountTier) SyncFromFen() {
+	d.MinBalance = FenToYuan(d.MinBalanceFen)
+	d.MaxBalance = FenToYuan(d.MaxBalanceFen)
 }
